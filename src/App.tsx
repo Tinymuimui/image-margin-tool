@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import JSZip from 'jszip';
 import { embedDpiMetadata } from './lib/dpiMetadata';
 import { downloadBlob, isSupportedImage, outputFileName, resolveOutputFormat } from './lib/files';
-import { assertCanvasSize, canvasToBlob, decodeImage, renderImage, renderPreview } from './lib/image';
+import { assertCanvasSize, calculatePlacement, canvasToBlob, decodeImage, renderImage, renderPreview } from './lib/image';
 import { formatMm, mmToPx, pxToMm } from './lib/math';
 import type { ImageItem, Settings } from './types';
 
@@ -22,6 +22,7 @@ function App() {
   const [items, setItems] = useState<ImageItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string>('');
   const [message, setMessage] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -43,9 +44,10 @@ function App() {
   }, [settings.widthMm, settings.heightMm, settings.dpi]);
 
   const selectedItem = items.find((item) => item.id === selectedId) ?? items[0] ?? null;
-  const invalidCount = target.error
-    ? items.length
-    : items.filter((item) => item.widthPx > target.widthPx || item.heightPx > target.heightPx).length;
+  const selectedPlacement = useMemo(() => {
+    if (!selectedItem || target.error || target.widthPx <= 0 || target.heightPx <= 0) return null;
+    return calculatePlacement(selectedItem.widthPx, selectedItem.heightPx, target.widthPx, target.heightPx);
+  }, [selectedItem, target.error, target.widthPx, target.heightPx]);
 
   const updateSetting = <K extends keyof Settings>(key: K, value: Settings[K]) => {
     setSettings((current) => ({ ...current, [key]: value }));
@@ -95,12 +97,11 @@ function App() {
     const run = async () => {
       if (!selectedItem || target.error || target.widthPx === 0 || target.heightPx === 0) {
         setPreviewUrl(null);
+        setPreviewError('');
         return;
       }
-      if (selectedItem.widthPx > target.widthPx || selectedItem.heightPx > target.heightPx) {
-        setPreviewUrl(null);
-        return;
-      }
+      setPreviewError('');
+      setPreviewUrl(null);
 
       try {
         const decoded = await decodeImage(selectedItem.file);
@@ -115,6 +116,8 @@ function App() {
             backgroundColor: settings.backgroundColor,
           });
           const blob = await canvasToBlob(preview, 'jpeg', 0.88);
+          preview.width = 1;
+          preview.height = 1;
           if (cancelled) return;
           localUrl = URL.createObjectURL(blob);
           setPreviewUrl((previous) => {
@@ -124,8 +127,11 @@ function App() {
         } finally {
           decoded.close();
         }
-      } catch {
-        if (!cancelled) setPreviewUrl(null);
+      } catch (error) {
+        if (!cancelled) {
+          setPreviewUrl(null);
+          setPreviewError(error instanceof Error ? error.message : String(error));
+        }
       }
     };
 
@@ -147,10 +153,6 @@ function App() {
     }
     if (target.error) {
       setMessage(target.error);
-      return;
-    }
-    if (invalidCount > 0) {
-      setMessage(`指定サイズを超える画像が ${invalidCount} 件あります。元画像は縮小しないため、仕上がりサイズを大きくしてください。`);
       return;
     }
 
@@ -239,7 +241,7 @@ function App() {
         <div>
           <p className="eyebrow">Browser-only print utility</p>
           <h1>Print Margin Extender</h1>
-          <p className="lead">元画像を拡大・縮小せず、指定した mm × DPI まで自然な余白を追加します。画像はサーバーへ送信しません。</p>
+          <p className="lead">元画像は、仕上がりサイズを超える場合だけアスペクト比を維持して自動縮小し、不足分に自然な余白を追加します。画像はサーバーへ送信しません。</p>
         </div>
         <div className="privacy-badge">Local processing</div>
       </header>
@@ -332,7 +334,8 @@ function App() {
           <div className="workspace">
             <div className="file-list" aria-label="画像一覧">
               {items.map((item) => {
-                const tooLarge = !target.error && (item.widthPx > target.widthPx || item.heightPx > target.heightPx);
+                const placement = target.error ? null : calculatePlacement(item.widthPx, item.heightPx, target.widthPx, target.heightPx);
+                const autoScaled = placement?.scaledDown ?? false;
                 return (
                   <div key={item.id} className={`file-row ${selectedItem?.id === item.id ? 'selected' : ''}`}>
                     <button className="file-main" type="button" onClick={() => setSelectedId(item.id)}>
@@ -342,7 +345,9 @@ function App() {
                         {' / '}
                         {formatMm(pxToMm(item.widthPx, settings.dpi))} × {formatMm(pxToMm(item.heightPx, settings.dpi))} mm相当
                       </span>
-                      <span className={tooLarge ? 'status-bad' : 'status-good'}>{tooLarge ? '指定サイズを超過' : '処理可能'}</span>
+                      <span className={autoScaled ? 'status-warn' : 'status-good'}>
+                        {autoScaled && placement ? `\u81ea\u52d5\u7e2e\u5c0f ${(placement.scale * 100).toFixed(1)}%` : '\u7b49\u500d\u3067\u51e6\u7406'}
+                      </span>
                     </button>
                     <button className="remove-button" type="button" aria-label={`${item.file.name} を削除`} onClick={() => removeItem(item.id)}>×</button>
                   </div>
@@ -355,13 +360,13 @@ function App() {
               {previewUrl ? (
                 <img src={previewUrl} alt="余白追加後のプレビュー" />
               ) : (
-                <div className="preview-empty">プレビューできません</div>
+                <div className={`preview-empty ${previewError ? 'error' : ''}`}>{previewError ? `プレビューエラー: ${previewError}` : 'プレビューを生成中です…'}</div>
               )}
-              {selectedItem && !target.error && (
+              {selectedItem && selectedPlacement && !target.error && (
                 <div className="preview-stats">
-                  <span>元画像は1:1配置</span>
-                  <span>左右余白: {formatMm(Math.max(0, pxToMm(target.widthPx - selectedItem.widthPx, settings.dpi) / 2))} mm/側</span>
-                  <span>上下余白: {formatMm(Math.max(0, pxToMm(target.heightPx - selectedItem.heightPx, settings.dpi) / 2))} mm/側</span>
+                  <span>{`\u7e2e\u5c0f\u7387: ${(selectedPlacement.scale * 100).toFixed(1)}%${selectedPlacement.scaledDown ? ' (\u81ea\u52d5\u7e2e\u5c0f)' : ''}`}</span>
+                  <span>{`\u5de6\u53f3\u4f59\u767d: ${formatMm(pxToMm(target.widthPx - selectedPlacement.drawWidth, settings.dpi) / 2)} mm/\u5074`}</span>
+                  <span>{`\u4e0a\u4e0b\u4f59\u767d: ${formatMm(pxToMm(target.heightPx - selectedPlacement.drawHeight, settings.dpi) / 2)} mm/\u5074`}</span>
                 </div>
               )}
             </div>
@@ -374,7 +379,7 @@ function App() {
           <h2>3. 一括出力</h2>
           <p>各画像に指定DPIメタデータを書き込み、ZIPでまとめて保存します。</p>
         </div>
-        <button className="primary-button" type="button" disabled={busy || items.length === 0 || Boolean(target.error) || invalidCount > 0} onClick={() => void processAll()}>
+        <button className="primary-button" type="button" disabled={busy || items.length === 0 || Boolean(target.error)} onClick={() => void processAll()}>
           {busy ? '処理中…' : `ZIPを作成 (${items.length}件)`}
         </button>
       </section>
