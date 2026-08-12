@@ -89,3 +89,80 @@ input:focus, select:focus, button:focus-visible { outline: 3px solid rgba(37, 99
 .fatal-error { max-width: 760px; margin: 48px auto 0; }
 .fatal-error h1 { font-size: 28px; }
 .fatal-error pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; }
+
+.custom-bg-panel {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #dbe3ec;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.custom-bg-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.custom-bg-heading strong { font-size: 14px; color: #0f172a; }
+.custom-bg-heading p { margin-top: 4px; font-size: 12px; }
+.custom-bg-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ghost-button.danger { color: #991b1b; border-color: #fecaca; }
+.ghost-button.danger:hover { background: #fef2f2; }
+.custom-bg-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.3fr) repeat(3, minmax(150px, 1fr));
+  gap: 14px;
+  align-items: end;
+  margin-top: 14px;
+}
+.background-file-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 72px;
+}
+.background-file-card img,
+.background-empty {
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  border: 1px solid #dbe3ec;
+  object-fit: cover;
+  background: #e2e8f0;
+}
+.background-empty {
+  display: grid;
+  place-items: center;
+  padding: 6px;
+  text-align: center;
+  color: #64748b;
+  font-size: 10px;
+}
+.background-file-card span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #475569;
+  font-size: 12px;
+}
+.inline-error {
+  margin-top: 12px;
+  padding: 9px 11px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+@media (max-width: 1000px) {
+  .custom-bg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  .custom-bg-heading { align-items: stretch; flex-direction: column; }
+  .custom-bg-actions { display: grid; grid-template-columns: 1fr; }
+  .custom-bg-grid { grid-template-columns: 1fr; }
+}
