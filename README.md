@@ -1,92 +1,74 @@
 # Print Margin Extender
 
-複数の JPEG / PNG に対して、元画像をリサイズせず、指定した **mm × DPI** の仕上がりサイズまで余白を追加するブラウザ内ツールです。
+Browser-only React/TypeScript utility for preparing JPEG/PNG images for print.
 
-## 主な仕様
+## Behavior
 
-- 複数画像のドラッグ＆ドロップ
-- 仕上がり幅・高さを mm 指定
-- DPI 指定（初期値 300 dpi）
-- 元画像は 1:1 のまま中央配置し、拡大・縮小・トリミングしない
-- 余白モード
-  - ぼかし拡張（推奨）
-  - 端を引き伸ばす
-  - 単色
-- PNG / JPEG の DPI メタデータを明示的に設定
-  - PNG: `pHYs`
-  - JPEG: JFIF density + EXIF X/YResolution/ResolutionUnit
-- 複数画像を ZIP で一括保存
-- 画像処理はすべてブラウザ内で実行。サーバーへのアップロードなし
-- GitHub Pages 対応
+- Target size is specified in millimeters and DPI.
+- If the source already fits inside the target pixel dimensions, it stays at 1:1 pixel size.
+- If the source exceeds the target width or height, it is automatically scaled down with aspect ratio preserved so it fits entirely inside the target.
+- No cropping or upscaling is performed.
+- Remaining space can use:
+  - blurred extension of the source image
+  - custom JPEG/PNG background image
+  - edge stretch
+  - solid color
+- Custom background controls:
+  - blur amount in mm
+  - fit mode: cover / contain / stretch
+  - opacity
+  - brightness
+- The custom background is shared by all foreground images in the current batch.
+- The foreground is always drawn after the background, so background blur does not blur the foreground.
+- PNG and JPEG DPI metadata is explicitly written after Canvas encoding.
+- Multiple files are processed sequentially and exported as one ZIP.
+- All image processing is local in the browser; images are not uploaded to an API/server.
 
-## 重要な前提
+## Oversized-image behavior
 
-このアプリでは **元画像も指定した DPI で扱う** ため、元画像の実寸は次式で計算します。
+An oversized source uses:
 
 ```text
-実寸(mm) = ピクセル数 / DPI × 25.4
+scale = min(1, targetWidth / sourceWidth, targetHeight / sourceHeight)
 ```
 
-例えば 900 × 1200 px を 300 dpi で扱う場合、約 76.2 × 101.6 mm です。
+This keeps the aspect ratio, avoids cropping, and ensures offsets never become negative. The preview path first reduces an oversized foreground to the fitted preview size to avoid unnecessarily large preview canvases.
 
-指定した仕上がりピクセルより元画像が大きい場合は、元画像を縮小しない仕様のためエラーにします。
+## Custom background in v1.2.0
 
-## 印刷に関する注意
+Choose **カスタム背景画像** in the margin mode and select one JPEG/PNG background. The background is rendered before the foreground and can be adjusted independently:
 
-- ブラウザ Canvas は CMYK / ICC カラープロファイルの保持を保証しません。
-- 色校正が必要な商業印刷・入稿では、生成後に Photoshop 等のカラーマネジメント対応ソフトで最終確認してください。
-- DPI メタデータを埋め込んでも、印刷ダイアログ側で自動拡大・縮小すると寸法は変わります。印刷時は「実際のサイズ」「100%」を選んでください。
-- 「ぼかし拡張」は生成AIではありません。複雑な人物、文字、規則模様を自然に描き足す用途では AI アウトペインティングの方が適しています。
+- **BGぼかし量 (mm)**: 0-20 mm
+- **BG配置**:
+  - Cover: fills the full target while preserving aspect ratio; excess may be cropped
+  - Contain: shows the whole background while preserving aspect ratio; underlay color may remain visible
+  - Stretch: fills the target exactly; aspect ratio may change
+- **BG不透明度**: 0-100%
+- **BG明るさ**: 0-300%
+- **下地色** is visible behind a transparent/contained custom background.
 
-## 開発環境
+## Print caveats
 
-Vite 8 の要件（Node.js 20.19+ / 22.12+）に合わせ、Node.js 22 を推奨します。
+- Browser Canvas does not guarantee preservation of CMYK or ICC profiles.
+- For commercial print workflows requiring color management, verify the generated files in a color-managed application before submission.
+- Print at 100% / actual size. Printer-driver scaling changes the physical dimensions.
+
+## Development
+
+Requires Node.js 20.19+ or 22.12+; Node.js 22 is recommended.
 
 ```bash
 npm install
+npm run check
+npm run build
 npm run dev
 ```
 
-型チェック + セルフチェック:
+## GitHub Pages
 
-```bash
-npm run check
-```
+1. Upload the project contents to the repository root, including `.github/workflows/deploy.yml`.
+2. In GitHub: **Settings -> Pages -> Build and deployment -> Source -> GitHub Actions**.
+3. Push/commit to `main`.
+4. The workflow runs type/self checks, builds Vite, uploads `dist`, and deploys Pages.
 
-本番ビルド:
-
-```bash
-npm run build
-npm run preview
-```
-
-## GitHub Pages への公開
-
-1. このプロジェクトを GitHub リポジトリへ push します。
-2. GitHub の **Settings → Pages** を開きます。
-3. **Build and deployment → Source** を **GitHub Actions** にします。
-4. `main` ブランチへ push すると `.github/workflows/deploy.yml` が自動ビルド・公開します。
-
-`vite.config.ts` は `base: './'` にしてあるため、ユーザー/組織 Pages とプロジェクト Pages のどちらでも静的アセットを相対参照できます。このアプリは SPA ルーティングを使っていません。
-
-## リポジトリ作成例
-
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/<YOUR_NAME>/image-margin-tool.git
-git push -u origin main
-```
-
-## 出力方式
-
-- 出力ファイル名: `001_original_margin_100x150mm_300dpi.jpg` の形式
-- 複数画像は `print-margin_100x150mm_300dpi.zip` として保存
-- JPEG は既定で品質 0.95
-- ZIP 内の画像はすでに PNG/JPEG 圧縮済みのため、ZIP 側は `STORE` を使用して不要な再圧縮を避けています
-
-## セキュリティ/プライバシー
-
-画像データを外部 API に送信する処理はありません。GitHub Pages から配信される JavaScript が、ユーザーのブラウザ内で File API / Canvas API を使用して処理します。
+`vite.config.ts` uses `base: './'`, so this single-page static app works under a project Pages subpath without hardcoding the repository name.
