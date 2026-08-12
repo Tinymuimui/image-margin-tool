@@ -20,13 +20,61 @@ const DEFAULT_SETTINGS: Settings = {
   dpi: 300,
   mode: 'blur',
   blurMm: 2.5,
+  featherMm: 3,
   backgroundColor: '#ffffff',
   backgroundFit: 'cover',
   backgroundOpacity: 1,
-  backgroundBrightness: 1,
+  backgroundBrightness: 0.96,
+  backgroundSaturation: 0.92,
+  backgroundContrast: 0.96,
+  photoBackgroundSource: 'source',
+  colorMatchStrength: 0.3,
+  grainStrength: 0.018,
   outputFormat: 'same',
   jpegQuality: 0.95,
 };
+
+interface SliderNumberProps {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  suffix?: string;
+  disabled?: boolean;
+  onChange: (value: number) => void;
+}
+
+function SliderNumber({ label, value, min, max, step, suffix = '', disabled = false, onChange }: SliderNumberProps) {
+  return (
+    <label className="slider-control">
+      <span>{label}</span>
+      <div className="slider-row">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        <div className="slider-number-wrap">
+          <input
+            type="number"
+            min={min}
+            max={max}
+            step={step}
+            value={value}
+            disabled={disabled}
+            onChange={(event) => onChange(Number(event.target.value))}
+          />
+          {suffix && <span>{suffix}</span>}
+        </div>
+      </div>
+    </label>
+  );
+}
 
 function App() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -57,8 +105,11 @@ function App() {
     }
   }, [settings.widthMm, settings.heightMm, settings.dpi]);
 
-  const backgroundRequirementError = settings.mode === 'custom' && !backgroundFile
-    ? 'カスタム背景を使用する場合は背景画像を選択してください。'
+  const needsCustomBackground = settings.mode === 'custom'
+    || (settings.mode === 'photo' && settings.photoBackgroundSource === 'custom');
+
+  const backgroundRequirementError = needsCustomBackground && !backgroundFile
+    ? 'この設定ではカスタム背景画像が必要です。背景画像を選択してください。'
     : '';
 
   const selectedItem = items.find((item) => item.id === selectedId) ?? items[0] ?? null;
@@ -141,79 +192,96 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    let localUrl: string | null = null;
 
     const run = async () => {
       if (!selectedItem || target.error || target.widthPx === 0 || target.heightPx === 0) {
-        setPreviewUrl(null);
+        setPreviewUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous);
+          return null;
+        });
         setPreviewError('');
         return;
       }
       if (backgroundRequirementError) {
-        setPreviewUrl(null);
+        setPreviewUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous);
+          return null;
+        });
         setPreviewError(backgroundRequirementError);
         return;
       }
 
       setPreviewError('');
-      setPreviewUrl(null);
 
       let foreground: DecodedImage | null = null;
       let background: DecodedImage | null = null;
+      let preview: HTMLCanvasElement | null = null;
 
       try {
         foreground = await decodeImage(selectedItem.file);
-        if (settings.mode === 'custom' && backgroundFile) {
+        if (needsCustomBackground && backgroundFile) {
           background = await decodeImage(backgroundFile);
         }
         if (cancelled) return;
 
-        const blurEnabled = settings.mode === 'blur' || settings.mode === 'custom';
+        const blurEnabled = settings.mode === 'blur' || settings.mode === 'custom' || settings.mode === 'photo';
         const blurPx = blurEnabled && settings.blurMm > 0
           ? mmToPx(settings.blurMm, settings.dpi)
+          : 0;
+        const featherPx = settings.mode === 'photo' && settings.featherMm > 0
+          ? mmToPx(settings.featherMm, settings.dpi)
           : 0;
 
         const backgroundImage: RenderBackgroundImage | undefined = background
           ? { source: background.source, width: background.width, height: background.height }
           : undefined;
 
-        const preview = renderPreview(foreground.source, foreground.width, foreground.height, {
+        preview = renderPreview(foreground.source, foreground.width, foreground.height, {
           targetWidth: target.widthPx,
           targetHeight: target.heightPx,
           mode: settings.mode,
           blurPx,
+          featherPx,
           backgroundColor: settings.backgroundColor,
           backgroundImage,
           backgroundFit: settings.backgroundFit,
           backgroundOpacity: settings.backgroundOpacity,
           backgroundBrightness: settings.backgroundBrightness,
+          backgroundSaturation: settings.backgroundSaturation,
+          backgroundContrast: settings.backgroundContrast,
+          photoBackgroundSource: settings.photoBackgroundSource,
+          colorMatchStrength: settings.colorMatchStrength,
+          grainStrength: settings.grainStrength,
         });
 
         const blob = await canvasToBlob(preview, 'jpeg', 0.88);
-        preview.width = 1;
-        preview.height = 1;
         if (cancelled) return;
-
-        localUrl = URL.createObjectURL(blob);
+        const nextUrl = URL.createObjectURL(blob);
         setPreviewUrl((previous) => {
           if (previous) URL.revokeObjectURL(previous);
-          return localUrl;
+          return nextUrl;
         });
       } catch (error) {
         if (!cancelled) {
-          setPreviewUrl(null);
+          setPreviewUrl((previous) => {
+            if (previous) URL.revokeObjectURL(previous);
+            return null;
+          });
           setPreviewError(error instanceof Error ? error.message : String(error));
         }
       } finally {
         foreground?.close();
         background?.close();
+        if (preview) {
+          preview.width = 1;
+          preview.height = 1;
+        }
       }
     };
 
     void run();
     return () => {
       cancelled = true;
-      if (localUrl) URL.revokeObjectURL(localUrl);
     };
   }, [
     selectedItem,
@@ -222,18 +290,21 @@ function App() {
     target.heightPx,
     settings.mode,
     settings.blurMm,
+    settings.featherMm,
     settings.dpi,
     settings.backgroundColor,
     settings.backgroundFit,
     settings.backgroundOpacity,
     settings.backgroundBrightness,
+    settings.backgroundSaturation,
+    settings.backgroundContrast,
+    settings.photoBackgroundSource,
+    settings.colorMatchStrength,
+    settings.grainStrength,
     backgroundFile,
+    needsCustomBackground,
     backgroundRequirementError,
   ]);
-
-  useEffect(() => () => {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-  }, [previewUrl]);
 
   const processAll = async () => {
     if (items.length === 0) {
@@ -257,13 +328,16 @@ function App() {
     let background: DecodedImage | null = null;
 
     try {
-      if (settings.mode === 'custom' && backgroundFile) {
+      if (needsCustomBackground && backgroundFile) {
         background = await decodeImage(backgroundFile);
       }
 
-      const blurEnabled = settings.mode === 'blur' || settings.mode === 'custom';
+      const blurEnabled = settings.mode === 'blur' || settings.mode === 'custom' || settings.mode === 'photo';
       const blurPx = blurEnabled && settings.blurMm > 0
         ? mmToPx(settings.blurMm, settings.dpi)
+        : 0;
+      const featherPx = settings.mode === 'photo' && settings.featherMm > 0
+        ? mmToPx(settings.featherMm, settings.dpi)
         : 0;
 
       const backgroundImage: RenderBackgroundImage | undefined = background
@@ -284,11 +358,17 @@ function App() {
               targetHeight: target.heightPx,
               mode: settings.mode,
               blurPx,
+              featherPx,
               backgroundColor: settings.backgroundColor,
               backgroundImage,
               backgroundFit: settings.backgroundFit,
               backgroundOpacity: settings.backgroundOpacity,
               backgroundBrightness: settings.backgroundBrightness,
+              backgroundSaturation: settings.backgroundSaturation,
+              backgroundContrast: settings.backgroundContrast,
+              photoBackgroundSource: settings.photoBackgroundSource,
+              colorMatchStrength: settings.colorMatchStrength,
+              grainStrength: settings.grainStrength,
             });
 
             const format = resolveOutputFormat(item.file, settings.outputFormat);
@@ -327,7 +407,7 @@ function App() {
       setProgress(100);
       setMessage(
         failures.length > 0
-          ? `完了しました。${items.length - failures.length}件成功、${failures.length}件失敗。`
+          ? `完了しました。${items.length - failures.length}件成功、${failures.length}件失敗。\n${failures.join('\n')}`
           : `${items.length}件を処理してZIPを作成しました。`,
       );
     } catch (error) {
@@ -354,6 +434,9 @@ function App() {
     && !target.error
     && !backgroundRequirementError;
 
+  const showBackgroundPicker = settings.mode === 'custom'
+    || (settings.mode === 'photo' && settings.photoBackgroundSource === 'custom');
+
   return (
     <main className="app-shell">
       <header className="hero">
@@ -361,8 +444,8 @@ function App() {
           <p className="eyebrow">Browser-only print utility</p>
           <h1>Print Margin Extender</h1>
           <p className="lead">
-            元画像は、仕上がりサイズを超える場合だけアスペクト比を維持して自動縮小し、不足分に自然な余白を追加します。
-            好みの背景画像も指定できます。画像はサーバーへ送信しません。
+            仕上がりサイズを超える画像はアスペクト比を維持して自動縮小し、不足分に余白を追加します。
+            写真向けの「写真なじませ」では、境界フェザー・色調・粒状感を調整して貼り付け感を抑えます。画像はサーバーへ送信しません。
           </p>
         </div>
         <div className="privacy-badge">Local processing</div>
@@ -386,6 +469,7 @@ function App() {
           <label>
             <span>余白生成</span>
             <select value={settings.mode} onChange={(e) => updateSetting('mode', e.target.value as Settings['mode'])}>
+              <option value="photo">写真なじませ（写真向け）</option>
               <option value="blur">元画像をぼかし拡張</option>
               <option value="custom">カスタム背景画像</option>
               <option value="edge">端を引き伸ばす</option>
@@ -399,9 +483,9 @@ function App() {
               min="0"
               max="20"
               step="0.1"
-              disabled={settings.mode !== 'blur' && settings.mode !== 'custom'}
+              disabled={settings.mode !== 'blur' && settings.mode !== 'custom' && settings.mode !== 'photo'}
               value={settings.blurMm}
-              onChange={(e) => updateSetting('blurMm', Number(e.target.value))}
+              onChange={(e) => updateSetting('blurMm', Math.max(0, Number(e.target.value)))}
             />
           </label>
           <label>
@@ -421,16 +505,194 @@ function App() {
           </label>
           <label>
             <span>JPEG品質</span>
-            <input type="number" min="0.5" max="1" step="0.01" value={settings.jpegQuality} onChange={(e) => updateSetting('jpegQuality', Number(e.target.value))} />
+            <input type="number" min="0.5" max="1" step="0.01" value={settings.jpegQuality} onChange={(e) => updateSetting('jpegQuality', Math.min(1, Math.max(0.5, Number(e.target.value))))} />
           </label>
         </div>
 
+        {settings.mode === 'photo' && (
+          <div className="photo-panel">
+            <div className="panel-subheading">
+              <div>
+                <strong>写真なじませ</strong>
+                <p>背景をぼかして色調・粒状感を合わせ、余白がある辺だけ前景の外周をフェザーして境界をなじませます。</p>
+              </div>
+              <span className="recommend-badge">写真推奨</span>
+            </div>
+
+            <div className="photo-grid">
+              <label>
+                <span>写真用BG</span>
+                <select value={settings.photoBackgroundSource} onChange={(e) => updateSetting('photoBackgroundSource', e.target.value as Settings['photoBackgroundSource'])}>
+                  <option value="source">元画像から生成（推奨）</option>
+                  <option value="custom">カスタム背景を使用</option>
+                </select>
+              </label>
+              <label>
+                <span>BG配置</span>
+                <select value={settings.backgroundFit} onChange={(e) => updateSetting('backgroundFit', e.target.value as Settings['backgroundFit'])}>
+                  <option value="cover">全面に敷く（推奨）</option>
+                  <option value="contain">全体を表示</option>
+                  <option value="stretch">引き伸ばして全面</option>
+                </select>
+              </label>
+              <SliderNumber
+                label="境界フェザー"
+                value={settings.featherMm}
+                min={0}
+                max={10}
+                step={0.1}
+                suffix="mm"
+                onChange={(value) => updateSetting('featherMm', Math.min(10, Math.max(0, value)))}
+              />
+              <SliderNumber
+                label="BG明るさ"
+                value={Math.round(settings.backgroundBrightness * 100)}
+                min={0}
+                max={200}
+                step={1}
+                suffix="%"
+                onChange={(value) => updateSetting('backgroundBrightness', Math.min(2, Math.max(0, value / 100)))}
+              />
+              <SliderNumber
+                label="BG彩度"
+                value={Math.round(settings.backgroundSaturation * 100)}
+                min={0}
+                max={200}
+                step={1}
+                suffix="%"
+                onChange={(value) => updateSetting('backgroundSaturation', Math.min(2, Math.max(0, value / 100)))}
+              />
+              <SliderNumber
+                label="BGコントラスト"
+                value={Math.round(settings.backgroundContrast * 100)}
+                min={0}
+                max={200}
+                step={1}
+                suffix="%"
+                onChange={(value) => updateSetting('backgroundContrast', Math.min(2, Math.max(0, value / 100)))}
+              />
+              <SliderNumber
+                label="色なじませ"
+                value={Math.round(settings.colorMatchStrength * 100)}
+                min={0}
+                max={100}
+                step={1}
+                suffix="%"
+                onChange={(value) => updateSetting('colorMatchStrength', Math.min(1, Math.max(0, value / 100)))}
+              />
+              <SliderNumber
+                label="粒状感"
+                value={Number((settings.grainStrength * 100).toFixed(1))}
+                min={0}
+                max={10}
+                step={0.1}
+                suffix="%"
+                onChange={(value) => updateSetting('grainStrength', Math.min(0.1, Math.max(0, value / 100)))}
+              />
+              <SliderNumber
+                label="BG不透明度"
+                value={Math.round(settings.backgroundOpacity * 100)}
+                min={0}
+                max={100}
+                step={1}
+                suffix="%"
+                onChange={(value) => updateSetting('backgroundOpacity', Math.min(1, Math.max(0, value / 100)))}
+              />
+            </div>
+
+            <div className="preset-row">
+              <span>目安:</span>
+              <button
+                type="button"
+                className="preset-button"
+                onClick={() => setSettings((current) => ({
+                  ...current,
+                  blurMm: 2.5,
+                  featherMm: 2,
+                  backgroundBrightness: 0.98,
+                  backgroundSaturation: 0.95,
+                  backgroundContrast: 0.98,
+                  colorMatchStrength: 0.2,
+                  grainStrength: 0.01,
+                }))}
+              >
+                弱め
+              </button>
+              <button
+                type="button"
+                className="preset-button"
+                onClick={() => setSettings((current) => ({
+                  ...current,
+                  blurMm: 3.5,
+                  featherMm: 3.5,
+                  backgroundBrightness: 0.96,
+                  backgroundSaturation: 0.9,
+                  backgroundContrast: 0.95,
+                  colorMatchStrength: 0.35,
+                  grainStrength: 0.02,
+                }))}
+              >
+                標準
+              </button>
+              <button
+                type="button"
+                className="preset-button"
+                onClick={() => setSettings((current) => ({
+                  ...current,
+                  blurMm: 5,
+                  featherMm: 5,
+                  backgroundBrightness: 0.92,
+                  backgroundSaturation: 0.82,
+                  backgroundContrast: 0.9,
+                  colorMatchStrength: 0.55,
+                  grainStrength: 0.035,
+                }))}
+              >
+                強め
+              </button>
+            </div>
+          </div>
+        )}
+
         {settings.mode === 'custom' && (
           <div className="custom-bg-panel">
-            <div className="custom-bg-heading">
+            <div className="panel-subheading">
               <div>
                 <strong>カスタム背景</strong>
-                <p>1枚の背景画像を、処理するすべての画像に共通で使用します。</p>
+                <p>1枚の背景画像を処理対象すべてに共通で使用します。前景自体はぼかしません。</p>
+              </div>
+            </div>
+            <div className="custom-bg-grid controls-only">
+              <label>
+                <span>BG配置</span>
+                <select value={settings.backgroundFit} onChange={(e) => updateSetting('backgroundFit', e.target.value as Settings['backgroundFit'])}>
+                  <option value="cover">全面に敷く（推奨）</option>
+                  <option value="contain">全体を表示</option>
+                  <option value="stretch">引き伸ばして全面</option>
+                </select>
+              </label>
+              <label>
+                <span>BG不透明度 (%)</span>
+                <input type="number" min="0" max="100" step="1" value={Math.round(settings.backgroundOpacity * 100)} onChange={(e) => updateSetting('backgroundOpacity', Math.min(1, Math.max(0, Number(e.target.value) / 100)))} />
+              </label>
+              <label>
+                <span>BG明るさ (%)</span>
+                <input type="number" min="0" max="300" step="5" value={Math.round(settings.backgroundBrightness * 100)} onChange={(e) => updateSetting('backgroundBrightness', Math.min(3, Math.max(0, Number(e.target.value) / 100)))} />
+              </label>
+              <label>
+                <span>BG彩度 (%)</span>
+                <input type="number" min="0" max="300" step="5" value={Math.round(settings.backgroundSaturation * 100)} onChange={(e) => updateSetting('backgroundSaturation', Math.min(3, Math.max(0, Number(e.target.value) / 100)))} />
+              </label>
+            </div>
+          </div>
+        )}
+
+        {showBackgroundPicker && (
+          <div className="background-picker-panel">
+            <div className="custom-bg-heading">
+              <div>
+                <strong>背景画像</strong>
+                <p>JPEG / PNG。選択した画像はブラウザ内だけで使用します。</p>
               </div>
               <div className="custom-bg-actions">
                 <button className="ghost-button" type="button" onClick={() => backgroundInputRef.current?.click()} disabled={busy}>
@@ -456,50 +718,14 @@ function App() {
               }}
             />
 
-            <div className="custom-bg-grid">
-              <div className="background-file-card">
-                {backgroundPreviewUrl ? (
-                  <img src={backgroundPreviewUrl} alt="選択した背景画像" />
-                ) : (
-                  <div className="background-empty">背景画像未選択</div>
-                )}
-                <span>{backgroundFile?.name ?? 'JPEG / PNG を選択してください'}</span>
-              </div>
-
-              <label>
-                <span>BG配置</span>
-                <select value={settings.backgroundFit} onChange={(e) => updateSetting('backgroundFit', e.target.value as Settings['backgroundFit'])}>
-                  <option value="cover">全面に敷く（推奨）</option>
-                  <option value="contain">全体を表示</option>
-                  <option value="stretch">引き伸ばして全面</option>
-                </select>
-              </label>
-
-              <label>
-                <span>BG不透明度 (%)</span>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={Math.round(settings.backgroundOpacity * 100)}
-                  onChange={(e) => updateSetting('backgroundOpacity', Math.min(1, Math.max(0, Number(e.target.value) / 100)))}
-                />
-              </label>
-
-              <label>
-                <span>BG明るさ (%)</span>
-                <input
-                  type="number"
-                  min="0"
-                  max="300"
-                  step="5"
-                  value={Math.round(settings.backgroundBrightness * 100)}
-                  onChange={(e) => updateSetting('backgroundBrightness', Math.min(3, Math.max(0, Number(e.target.value) / 100)))}
-                />
-              </label>
+            <div className="background-file-card wide">
+              {backgroundPreviewUrl ? (
+                <img src={backgroundPreviewUrl} alt="選択した背景画像" />
+              ) : (
+                <div className="background-empty">背景画像未選択</div>
+              )}
+              <span>{backgroundFile?.name ?? 'JPEG / PNG を選択してください'}</span>
             </div>
-
             {backgroundRequirementError && <div className="inline-error">{backgroundRequirementError}</div>}
           </div>
         )}
@@ -577,6 +803,12 @@ function App() {
                   <span>{`縮小率: ${(selectedPlacement.scale * 100).toFixed(1)}%${selectedPlacement.scaledDown ? ' (自動縮小)' : ''}`}</span>
                   <span>{`左右余白: ${formatMm(pxToMm(target.widthPx - selectedPlacement.drawWidth, settings.dpi) / 2)} mm/側`}</span>
                   <span>{`上下余白: ${formatMm(pxToMm(target.heightPx - selectedPlacement.drawHeight, settings.dpi) / 2)} mm/側`}</span>
+                  {settings.mode === 'photo' && (
+                    <span>{`写真なじませ: フェザー ${settings.featherMm}mm / BGぼかし ${settings.blurMm}mm / 色なじませ ${Math.round(settings.colorMatchStrength * 100)}% / 粒状感 ${(settings.grainStrength * 100).toFixed(1)}%`}</span>
+                  )}
+                  {settings.mode === 'photo' && settings.photoBackgroundSource === 'custom' && backgroundFile && (
+                    <span>{`写真用BG: ${backgroundFile.name}`}</span>
+                  )}
                   {settings.mode === 'custom' && backgroundFile && (
                     <span>{`BG: ${backgroundFile.name} / ぼかし ${settings.blurMm}mm / 不透明度 ${Math.round(settings.backgroundOpacity * 100)}%`}</span>
                   )}
@@ -602,8 +834,8 @@ function App() {
 
       <section className="notice-grid">
         <article className="notice">
-          <h3>背景と余白について</h3>
-          <p>「カスタム背景画像」は指定した1枚を全画像の背景に使用し、ぼかし量・不透明度・明るさ・配置を調整できます。前景の元画像にはBGぼかしを掛けません。</p>
+          <h3>写真を自然になじませる目安</h3>
+          <p>まず「元画像から生成」、BGぼかし3〜5mm、境界フェザー2〜5mm、BG彩度85〜95%、色なじませ20〜45%、粒状感1〜3%を目安にしてください。人物や文字が画像端にある場合はフェザーを弱めてください。</p>
         </article>
         <article className="notice warning">
           <h3>印刷時の注意</h3>
