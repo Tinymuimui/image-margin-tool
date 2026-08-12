@@ -1,4 +1,4 @@
-import type { EncodedFormat, RenderOptions } from '../types';
+import type { BackgroundFit, EncodedFormat, RenderOptions } from '../types';
 
 export interface DecodedImage {
   source: CanvasImageSource;
@@ -22,6 +22,13 @@ export interface PreviewGeometry {
   sourceWidth: number;
   sourceHeight: number;
   previewScale: number;
+}
+
+export interface DrawRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 const MAX_CANVAS_PIXELS = 80_000_000;
@@ -61,13 +68,13 @@ export async function decodeImage(file: File): Promise<DecodedImage> {
 
 export function assertCanvasSize(width: number, height: number): void {
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
-    throw new RangeError('\u51fa\u529b\u30d4\u30af\u30bb\u30eb\u5bf8\u6cd5\u304c\u4e0d\u6b63\u3067\u3059\u3002');
+    throw new RangeError('出力ピクセル寸法が不正です。');
   }
   if (width > MAX_CANVAS_DIMENSION || height > MAX_CANVAS_DIMENSION) {
-    throw new RangeError(`\u30d6\u30e9\u30a6\u30b6\u51e6\u7406\u306e\u5b89\u5168\u4e0a\u30011\u8fba\u306f ${MAX_CANVAS_DIMENSION.toLocaleString()} px \u4ee5\u4e0b\u306b\u3057\u3066\u304f\u3060\u3055\u3044\u3002`);
+    throw new RangeError(`ブラウザ処理の安全上、1辺は ${MAX_CANVAS_DIMENSION.toLocaleString()} px 以下にしてください。`);
   }
   if (width * height > MAX_CANVAS_PIXELS) {
-    throw new RangeError(`\u30d6\u30e9\u30a6\u30b6\u51e6\u7406\u306e\u5b89\u5168\u4e0a\u3001\u51fa\u529b\u306f ${(MAX_CANVAS_PIXELS / 1_000_000).toFixed(0)} MP \u4ee5\u4e0b\u306b\u3057\u3066\u304f\u3060\u3055\u3044\u3002`);
+    throw new RangeError(`ブラウザ処理の安全上、出力は ${(MAX_CANVAS_PIXELS / 1_000_000).toFixed(0)} MP 以下にしてください。`);
   }
 }
 
@@ -78,13 +85,13 @@ export function calculatePlacement(
   targetHeight: number,
 ): Placement {
   if (!Number.isFinite(sourceWidth) || !Number.isFinite(sourceHeight) || sourceWidth <= 0 || sourceHeight <= 0) {
-    throw new RangeError('\u5143\u753b\u50cf\u306e\u30d4\u30af\u30bb\u30eb\u5bf8\u6cd5\u304c\u4e0d\u6b63\u3067\u3059\u3002');
+    throw new RangeError('元画像のピクセル寸法が不正です。');
   }
   assertCanvasSize(targetWidth, targetHeight);
 
   const scale = Math.min(1, targetWidth / sourceWidth, targetHeight / sourceHeight);
   if (!Number.isFinite(scale) || scale <= 0) {
-    throw new RangeError('\u753b\u50cf\u306e\u7e2e\u5c0f\u7387\u3092\u8a08\u7b97\u3067\u304d\u307e\u305b\u3093\u3002');
+    throw new RangeError('画像の縮小率を計算できません。');
   }
 
   const drawWidth = Math.min(targetWidth, Math.max(1, Math.round(sourceWidth * scale)));
@@ -102,13 +109,61 @@ export function calculatePlacement(
   };
 }
 
+export function calculateBackgroundRect(
+  sourceWidth: number,
+  sourceHeight: number,
+  targetWidth: number,
+  targetHeight: number,
+  fit: BackgroundFit,
+): DrawRect {
+  if (
+    !Number.isFinite(sourceWidth)
+    || !Number.isFinite(sourceHeight)
+    || sourceWidth <= 0
+    || sourceHeight <= 0
+    || targetWidth <= 0
+    || targetHeight <= 0
+  ) {
+    throw new RangeError('背景画像または出力サイズが不正です。');
+  }
+
+  if (fit === 'stretch') {
+    return { x: 0, y: 0, width: targetWidth, height: targetHeight };
+  }
+
+  const scale = fit === 'cover'
+    ? Math.max(targetWidth / sourceWidth, targetHeight / sourceHeight)
+    : Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+
+  const width = sourceWidth * scale;
+  const height = sourceHeight * scale;
+
+  return {
+    x: (targetWidth - width) / 2,
+    y: (targetHeight - height) / 2,
+    width,
+    height,
+  };
+}
+
 export function renderImage(
   source: CanvasImageSource,
   sourceWidth: number,
   sourceHeight: number,
   options: RenderOptions,
 ): HTMLCanvasElement {
-  const { targetWidth, targetHeight, mode, blurPx, backgroundColor } = options;
+  const {
+    targetWidth,
+    targetHeight,
+    mode,
+    blurPx,
+    backgroundColor,
+    backgroundImage,
+    backgroundFit,
+    backgroundOpacity,
+    backgroundBrightness,
+  } = options;
+
   assertCanvasSize(targetWidth, targetHeight);
   const placement = calculatePlacement(sourceWidth, sourceHeight, targetWidth, targetHeight);
 
@@ -134,22 +189,33 @@ export function renderImage(
       backgroundColor,
     );
 
-    if (mode === 'blur' && blurPx > 0) {
-      const pad = Math.max(2, Math.ceil(blurPx * 2));
-      ctx.save();
-      ctx.filter = `blur(${blurPx.toFixed(2)}px)`;
-      // Overscan avoids a pale/transparent blur fringe at the outer canvas boundary.
-      ctx.drawImage(background, -pad, -pad, targetWidth + pad * 2, targetHeight + pad * 2);
-      ctx.restore();
-    } else {
-      ctx.drawImage(background, 0, 0);
+    drawBackgroundLayer(ctx, background, targetWidth, targetHeight, mode === 'blur' ? blurPx : 0);
+    background.width = 1;
+    background.height = 1;
+  } else if (mode === 'custom') {
+    if (!backgroundImage) {
+      throw new Error('カスタム背景画像が選択されていません。');
     }
 
+    const background = createCustomBackground(
+      backgroundImage.source,
+      backgroundImage.width,
+      backgroundImage.height,
+      targetWidth,
+      targetHeight,
+      backgroundFit,
+      backgroundColor,
+      backgroundOpacity,
+      backgroundBrightness,
+    );
+
+    drawBackgroundLayer(ctx, background, targetWidth, targetHeight, blurPx);
     background.width = 1;
     background.height = 1;
   }
 
   // Draw the foreground last. It is only scaled when it would exceed the target canvas.
+  ctx.globalAlpha = 1;
   ctx.filter = 'none';
   ctx.drawImage(
     source,
@@ -199,8 +265,8 @@ export function renderPreview(
     maxPreviewDimension,
   );
 
-  // Important: pre-scale to the fitted foreground size, not merely by previewScale.
-  // This keeps oversized source images from creating unnecessarily huge preview canvases.
+  // Pre-scale the foreground to its fitted preview size. This avoids huge preview canvases
+  // when a very large source image is dropped into the app.
   const scaledSource = document.createElement('canvas');
   scaledSource.width = geometry.sourceWidth;
   scaledSource.height = geometry.sourceHeight;
@@ -221,6 +287,61 @@ export function renderPreview(
     scaledSource.width = 1;
     scaledSource.height = 1;
   }
+}
+
+function drawBackgroundLayer(
+  ctx: CanvasRenderingContext2D,
+  background: HTMLCanvasElement,
+  targetWidth: number,
+  targetHeight: number,
+  blurPx: number,
+): void {
+  if (blurPx > 0) {
+    const safeBlur = Math.min(Math.max(0, blurPx), Math.max(targetWidth, targetHeight));
+    const pad = Math.max(2, Math.ceil(safeBlur * 2));
+    ctx.save();
+    ctx.filter = `blur(${safeBlur.toFixed(2)}px)`;
+    // Overscan prevents transparent/flat blur fringes at the outside edge.
+    ctx.drawImage(background, -pad, -pad, targetWidth + pad * 2, targetHeight + pad * 2);
+    ctx.restore();
+  } else {
+    ctx.drawImage(background, 0, 0);
+  }
+}
+
+function createCustomBackground(
+  source: CanvasImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+  targetWidth: number,
+  targetHeight: number,
+  fit: BackgroundFit,
+  backgroundColor: string,
+  opacity: number,
+  brightness: number,
+): HTMLCanvasElement {
+  const bg = document.createElement('canvas');
+  bg.width = targetWidth;
+  bg.height = targetHeight;
+  const ctx = bg.getContext('2d', { alpha: false });
+  if (!ctx) throw new Error('Custom background Canvas 2D context is unavailable.');
+
+  ctx.fillStyle = backgroundColor;
+  ctx.fillRect(0, 0, targetWidth, targetHeight);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  const rect = calculateBackgroundRect(sourceWidth, sourceHeight, targetWidth, targetHeight, fit);
+  const safeOpacity = Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 1;
+  const safeBrightness = Number.isFinite(brightness) ? Math.min(3, Math.max(0, brightness)) : 1;
+
+  ctx.save();
+  ctx.globalAlpha = safeOpacity;
+  ctx.filter = `brightness(${safeBrightness.toFixed(3)})`;
+  ctx.drawImage(source, rect.x, rect.y, rect.width, rect.height);
+  ctx.restore();
+
+  return bg;
 }
 
 function createEdgeExtendedBackground(
@@ -294,7 +415,7 @@ export function canvasToBlob(canvas: HTMLCanvasElement, format: EncodedFormat, j
       canvas.toBlob(
         (blob) => {
           if (blob) resolve(blob);
-          else reject(new Error('\u753b\u50cf\u306e\u30a8\u30f3\u30b3\u30fc\u30c9\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002'));
+          else reject(new Error('画像のエンコードに失敗しました。'));
         },
         mime,
         format === 'jpeg' ? jpegQuality : undefined,
