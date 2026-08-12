@@ -13,9 +13,17 @@ export async function embedDpiMetadata(
     throw new RangeError('DPI は 1〜65535 の範囲で指定してください。');
   }
 
-  const input = new Uint8Array(await blob.arrayBuffer());
-  const output = format === 'png' ? setPngDpi(input, roundedDpi) : setJpegDpi(input, roundedDpi);
-  return new Blob([output], { type: format === 'png' ? 'image/png' : 'image/jpeg' });
+  const input = new Uint8Array(await blob.arrayBuffer());  
+  const output =
+    format === 'png'
+      ? setPngDpi(input, roundedDpi)
+      : setJpegDpi(input, roundedDpi);
+  
+  // BlobPart が確実に ArrayBuffer-backed Uint8Array になるようコピーする
+  const blobBytes = new Uint8Array(output);
+  return new Blob([blobBytes], {
+    type: format === 'png' ? 'image/png' : 'image/jpeg',
+  });
 }
 
 export function setPngDpi(input: Uint8Array, dpi: number): Uint8Array {
