@@ -31,8 +31,23 @@ export interface DrawRect {
   height: number;
 }
 
+export interface FeatherInsets {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+interface RgbColor {
+  r: number;
+  g: number;
+  b: number;
+}
+
 const MAX_CANVAS_PIXELS = 80_000_000;
 const MAX_CANVAS_DIMENSION = 32_767;
+const SAMPLE_SIZE = 48;
+const NOISE_TILE_SIZE = 96;
 
 export async function decodeImage(file: File): Promise<DecodedImage> {
   if ('createImageBitmap' in window) {
@@ -45,7 +60,7 @@ export async function decodeImage(file: File): Promise<DecodedImage> {
         close: () => bitmap.close(),
       };
     } catch {
-      // Fall through to HTMLImageElement for browsers/files createImageBitmap cannot decode.
+      // Fall through to HTMLImageElement for files/browsers createImageBitmap cannot decode.
     }
   }
 
@@ -146,6 +161,28 @@ export function calculateBackgroundRect(
   };
 }
 
+export function calculateFeatherInsets(
+  placement: Placement,
+  targetWidth: number,
+  targetHeight: number,
+  requestedFeatherPx: number,
+): FeatherInsets {
+  const safeRequested = Number.isFinite(requestedFeatherPx) ? Math.max(0, requestedFeatherPx) : 0;
+  const maxHorizontal = Math.max(0, Math.floor(placement.drawWidth * 0.45));
+  const maxVertical = Math.max(0, Math.floor(placement.drawHeight * 0.45));
+  const horizontal = Math.min(safeRequested, maxHorizontal);
+  const vertical = Math.min(safeRequested, maxVertical);
+  const rightMargin = Math.max(0, targetWidth - placement.offsetX - placement.drawWidth);
+  const bottomMargin = Math.max(0, targetHeight - placement.offsetY - placement.drawHeight);
+
+  return {
+    left: placement.offsetX > 0 ? horizontal : 0,
+    right: rightMargin > 0 ? horizontal : 0,
+    top: placement.offsetY > 0 ? vertical : 0,
+    bottom: bottomMargin > 0 ? vertical : 0,
+  };
+}
+
 export function renderImage(
   source: CanvasImageSource,
   sourceWidth: number,
@@ -157,11 +194,17 @@ export function renderImage(
     targetHeight,
     mode,
     blurPx,
+    featherPx,
     backgroundColor,
     backgroundImage,
     backgroundFit,
     backgroundOpacity,
     backgroundBrightness,
+    backgroundSaturation,
+    backgroundContrast,
+    photoBackgroundSource,
+    colorMatchStrength,
+    grainStrength,
   } = options;
 
   assertCanvasSize(targetWidth, targetHeight);
@@ -190,14 +233,13 @@ export function renderImage(
     );
 
     drawBackgroundLayer(ctx, background, targetWidth, targetHeight, mode === 'blur' ? blurPx : 0);
-    background.width = 1;
-    background.height = 1;
+    releaseCanvas(background);
   } else if (mode === 'custom') {
     if (!backgroundImage) {
       throw new Error('カスタム背景画像が選択されていません。');
     }
 
-    const background = createCustomBackground(
+    const background = createImageBackground(
       backgroundImage.source,
       backgroundImage.width,
       backgroundImage.height,
@@ -207,15 +249,56 @@ export function renderImage(
       backgroundColor,
       backgroundOpacity,
       backgroundBrightness,
+      backgroundSaturation,
+      backgroundContrast,
     );
 
     drawBackgroundLayer(ctx, background, targetWidth, targetHeight, blurPx);
-    background.width = 1;
-    background.height = 1;
+    releaseCanvas(background);
+  } else if (mode === 'photo') {
+    const useCustomBackground = photoBackgroundSource === 'custom';
+    if (useCustomBackground && !backgroundImage) {
+      throw new Error('写真なじませでカスタム背景を使う場合は、背景画像を選択してください。');
+    }
+
+    const photoBackground = useCustomBackground && backgroundImage
+      ? backgroundImage
+      : { source, width: sourceWidth, height: sourceHeight };
+
+    const background = createImageBackground(
+      photoBackground.source,
+      photoBackground.width,
+      photoBackground.height,
+      targetWidth,
+      targetHeight,
+      backgroundFit,
+      backgroundColor,
+      backgroundOpacity,
+      backgroundBrightness,
+      backgroundSaturation,
+      backgroundContrast,
+    );
+
+    drawBackgroundLayer(ctx, background, targetWidth, targetHeight, blurPx);
+    releaseCanvas(background);
+
+    const edgeColor = sampleEdgeColor(source, sourceWidth, sourceHeight);
+    applyColorHarmony(ctx, targetWidth, targetHeight, edgeColor, colorMatchStrength);
+    applyGrain(ctx, targetWidth, targetHeight, grainStrength);
+    drawFeatheredForeground(
+      ctx,
+      source,
+      placement,
+      targetWidth,
+      targetHeight,
+      featherPx,
+    );
+    return canvas;
   }
 
-  // Draw the foreground last. It is only scaled when it would exceed the target canvas.
+  // Standard modes keep a crisp, fully opaque foreground.
   ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
   ctx.filter = 'none';
   ctx.drawImage(
     source,
@@ -265,12 +348,12 @@ export function renderPreview(
     maxPreviewDimension,
   );
 
-  // Pre-scale the foreground to its fitted preview size. This avoids huge preview canvases
+  // Pre-scale the foreground to its fitted preview size. This keeps preview memory bounded
   // when a very large source image is dropped into the app.
   const scaledSource = document.createElement('canvas');
   scaledSource.width = geometry.sourceWidth;
   scaledSource.height = geometry.sourceHeight;
-  const scaledCtx = scaledSource.getContext('2d', { alpha: false });
+  const scaledCtx = scaledSource.getContext('2d', { alpha: true });
   if (!scaledCtx) throw new Error('Preview Canvas 2D context is unavailable.');
   scaledCtx.imageSmoothingEnabled = true;
   scaledCtx.imageSmoothingQuality = 'high';
@@ -282,10 +365,10 @@ export function renderPreview(
       targetWidth: geometry.targetWidth,
       targetHeight: geometry.targetHeight,
       blurPx: options.blurPx * geometry.previewScale,
+      featherPx: options.featherPx * geometry.previewScale,
     });
   } finally {
-    scaledSource.width = 1;
-    scaledSource.height = 1;
+    releaseCanvas(scaledSource);
   }
 }
 
@@ -309,7 +392,7 @@ function drawBackgroundLayer(
   }
 }
 
-function createCustomBackground(
+function createImageBackground(
   source: CanvasImageSource,
   sourceWidth: number,
   sourceHeight: number,
@@ -319,12 +402,14 @@ function createCustomBackground(
   backgroundColor: string,
   opacity: number,
   brightness: number,
+  saturation: number,
+  contrast: number,
 ): HTMLCanvasElement {
   const bg = document.createElement('canvas');
   bg.width = targetWidth;
   bg.height = targetHeight;
   const ctx = bg.getContext('2d', { alpha: false });
-  if (!ctx) throw new Error('Custom background Canvas 2D context is unavailable.');
+  if (!ctx) throw new Error('Background Canvas 2D context is unavailable.');
 
   ctx.fillStyle = backgroundColor;
   ctx.fillRect(0, 0, targetWidth, targetHeight);
@@ -332,12 +417,18 @@ function createCustomBackground(
   ctx.imageSmoothingQuality = 'high';
 
   const rect = calculateBackgroundRect(sourceWidth, sourceHeight, targetWidth, targetHeight, fit);
-  const safeOpacity = Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 1;
-  const safeBrightness = Number.isFinite(brightness) ? Math.min(3, Math.max(0, brightness)) : 1;
+  const safeOpacity = clamp(opacity, 0, 1, 1);
+  const safeBrightness = clamp(brightness, 0, 3, 1);
+  const safeSaturation = clamp(saturation, 0, 3, 1);
+  const safeContrast = clamp(contrast, 0, 3, 1);
 
   ctx.save();
   ctx.globalAlpha = safeOpacity;
-  ctx.filter = `brightness(${safeBrightness.toFixed(3)})`;
+  ctx.filter = [
+    `brightness(${safeBrightness.toFixed(3)})`,
+    `saturate(${safeSaturation.toFixed(3)})`,
+    `contrast(${safeContrast.toFixed(3)})`,
+  ].join(' ');
   ctx.drawImage(source, rect.x, rect.y, rect.width, rect.height);
   ctx.restore();
 
@@ -406,6 +497,193 @@ function createEdgeExtendedBackground(
 
   ctx.drawImage(source, offsetX, offsetY, drawWidth, drawHeight);
   return bg;
+}
+
+function drawFeatheredForeground(
+  targetCtx: CanvasRenderingContext2D,
+  source: CanvasImageSource,
+  placement: Placement,
+  targetWidth: number,
+  targetHeight: number,
+  featherPx: number,
+): void {
+  const insets = calculateFeatherInsets(placement, targetWidth, targetHeight, featherPx);
+  const hasFeather = insets.left > 0 || insets.right > 0 || insets.top > 0 || insets.bottom > 0;
+
+  if (!hasFeather) {
+    targetCtx.save();
+    targetCtx.globalAlpha = 1;
+    targetCtx.globalCompositeOperation = 'source-over';
+    targetCtx.filter = 'none';
+    targetCtx.drawImage(source, placement.offsetX, placement.offsetY, placement.drawWidth, placement.drawHeight);
+    targetCtx.restore();
+    return;
+  }
+
+  const foreground = document.createElement('canvas');
+  foreground.width = placement.drawWidth;
+  foreground.height = placement.drawHeight;
+  const ctx = foreground.getContext('2d', { alpha: true });
+  if (!ctx) throw new Error('Foreground feather Canvas 2D context is unavailable.');
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, 0, 0, placement.drawWidth, placement.drawHeight);
+  ctx.globalCompositeOperation = 'destination-in';
+
+  if (insets.left > 0) {
+    const gradient = ctx.createLinearGradient(0, 0, insets.left, 0);
+    gradient.addColorStop(0, 'rgba(0,0,0,0)');
+    gradient.addColorStop(1, 'rgba(0,0,0,1)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, insets.left, placement.drawHeight);
+  }
+  if (insets.right > 0) {
+    const start = placement.drawWidth - insets.right;
+    const gradient = ctx.createLinearGradient(start, 0, placement.drawWidth, 0);
+    gradient.addColorStop(0, 'rgba(0,0,0,1)');
+    gradient.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(start, 0, insets.right, placement.drawHeight);
+  }
+  if (insets.top > 0) {
+    const gradient = ctx.createLinearGradient(0, 0, 0, insets.top);
+    gradient.addColorStop(0, 'rgba(0,0,0,0)');
+    gradient.addColorStop(1, 'rgba(0,0,0,1)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, placement.drawWidth, insets.top);
+  }
+  if (insets.bottom > 0) {
+    const start = placement.drawHeight - insets.bottom;
+    const gradient = ctx.createLinearGradient(0, start, 0, placement.drawHeight);
+    gradient.addColorStop(0, 'rgba(0,0,0,1)');
+    gradient.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, start, placement.drawWidth, insets.bottom);
+  }
+
+  targetCtx.save();
+  targetCtx.globalCompositeOperation = 'source-over';
+  targetCtx.globalAlpha = 1;
+  targetCtx.filter = 'none';
+  targetCtx.drawImage(foreground, placement.offsetX, placement.offsetY);
+  targetCtx.restore();
+  releaseCanvas(foreground);
+}
+
+function sampleEdgeColor(source: CanvasImageSource, sourceWidth: number, sourceHeight: number): RgbColor {
+  const sample = document.createElement('canvas');
+  sample.width = SAMPLE_SIZE;
+  sample.height = SAMPLE_SIZE;
+  const ctx = sample.getContext('2d', { alpha: true, willReadFrequently: true });
+  if (!ctx) return { r: 128, g: 128, b: 128 };
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, 0, 0, sourceWidth, sourceHeight, 0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
+
+  try {
+    const pixels = ctx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE).data;
+    const border = Math.max(2, Math.floor(SAMPLE_SIZE * 0.12));
+    let red = 0;
+    let green = 0;
+    let blue = 0;
+    let weight = 0;
+
+    for (let y = 0; y < SAMPLE_SIZE; y += 1) {
+      for (let x = 0; x < SAMPLE_SIZE; x += 1) {
+        if (x >= border && x < SAMPLE_SIZE - border && y >= border && y < SAMPLE_SIZE - border) continue;
+        const index = (y * SAMPLE_SIZE + x) * 4;
+        const alpha = (pixels[index + 3] ?? 0) / 255;
+        if (alpha < 0.05) continue;
+        red += (pixels[index] ?? 0) * alpha;
+        green += (pixels[index + 1] ?? 0) * alpha;
+        blue += (pixels[index + 2] ?? 0) * alpha;
+        weight += alpha;
+      }
+    }
+
+    if (weight <= 0) return { r: 128, g: 128, b: 128 };
+    return {
+      r: Math.round(red / weight),
+      g: Math.round(green / weight),
+      b: Math.round(blue / weight),
+    };
+  } catch {
+    return { r: 128, g: 128, b: 128 };
+  } finally {
+    releaseCanvas(sample);
+  }
+}
+
+function applyColorHarmony(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  color: RgbColor,
+  strength: number,
+): void {
+  const safeStrength = clamp(strength, 0, 1, 0);
+  if (safeStrength <= 0) return;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'soft-light';
+  ctx.globalAlpha = Math.min(0.3, safeStrength * 0.24);
+  ctx.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
+  ctx.fillRect(0, 0, width, height);
+  ctx.restore();
+}
+
+function applyGrain(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  strength: number,
+): void {
+  const safeStrength = clamp(strength, 0, 0.15, 0);
+  if (safeStrength <= 0) return;
+
+  const tile = document.createElement('canvas');
+  tile.width = NOISE_TILE_SIZE;
+  tile.height = NOISE_TILE_SIZE;
+  const tileCtx = tile.getContext('2d', { alpha: true });
+  if (!tileCtx) return;
+
+  const imageData = tileCtx.createImageData(NOISE_TILE_SIZE, NOISE_TILE_SIZE);
+  const data = imageData.data;
+  let seed = ((width * 73856093) ^ (height * 19349663)) >>> 0;
+
+  for (let i = 0; i < data.length; i += 4) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const value = 80 + ((seed >>> 24) % 96);
+    data[i] = value;
+    data[i + 1] = value;
+    data[i + 2] = value;
+    data[i + 3] = 255;
+  }
+  tileCtx.putImageData(imageData, 0, 0);
+
+  const pattern = ctx.createPattern(tile, 'repeat');
+  if (pattern) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'soft-light';
+    ctx.globalAlpha = safeStrength;
+    ctx.fillStyle = pattern;
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+
+  releaseCanvas(tile);
+}
+
+function clamp(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
+function releaseCanvas(canvas: HTMLCanvasElement): void {
+  canvas.width = 1;
+  canvas.height = 1;
 }
 
 export function canvasToBlob(canvas: HTMLCanvasElement, format: EncodedFormat, jpegQuality: number): Promise<Blob> {
