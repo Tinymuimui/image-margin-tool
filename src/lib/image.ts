@@ -523,44 +523,71 @@ function drawFeatheredForeground(
   const foreground = document.createElement('canvas');
   foreground.width = placement.drawWidth;
   foreground.height = placement.drawHeight;
-  const ctx = foreground.getContext('2d', { alpha: true });
-  if (!ctx) throw new Error('Foreground feather Canvas 2D context is unavailable.');
+  const foregroundCtx = foreground.getContext('2d', { alpha: true });
+  if (!foregroundCtx) throw new Error('Foreground feather Canvas 2D context is unavailable.');
 
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(source, 0, 0, placement.drawWidth, placement.drawHeight);
-  ctx.globalCompositeOperation = 'destination-in';
+  foregroundCtx.imageSmoothingEnabled = true;
+  foregroundCtx.imageSmoothingQuality = 'high';
+  foregroundCtx.drawImage(source, 0, 0, placement.drawWidth, placement.drawHeight);
+
+  // Build a full-size alpha mask first, then apply it to the foreground once.
+  // Applying destination-in to only an edge strip clears every pixel outside that strip,
+  // which was the v1.3.0 bug that made the foreground disappear.
+  const mask = document.createElement('canvas');
+  mask.width = placement.drawWidth;
+  mask.height = placement.drawHeight;
+  const maskCtx = mask.getContext('2d', { alpha: true });
+  if (!maskCtx) {
+    releaseCanvas(foreground);
+    throw new Error('Foreground feather mask Canvas 2D context is unavailable.');
+  }
+
+  maskCtx.fillStyle = 'rgba(255,255,255,1)';
+  maskCtx.fillRect(0, 0, placement.drawWidth, placement.drawHeight);
+  maskCtx.globalCompositeOperation = 'destination-in';
 
   if (insets.left > 0) {
-    const gradient = ctx.createLinearGradient(0, 0, insets.left, 0);
-    gradient.addColorStop(0, 'rgba(0,0,0,0)');
-    gradient.addColorStop(1, 'rgba(0,0,0,1)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, insets.left, placement.drawHeight);
+    const gradient = maskCtx.createLinearGradient(0, 0, placement.drawWidth, 0);
+    gradient.addColorStop(0, 'rgba(255,255,255,0)');
+    gradient.addColorStop(insets.left / placement.drawWidth, 'rgba(255,255,255,1)');
+    gradient.addColorStop(1, 'rgba(255,255,255,1)');
+    maskCtx.fillStyle = gradient;
+    maskCtx.fillRect(0, 0, placement.drawWidth, placement.drawHeight);
   }
+
   if (insets.right > 0) {
     const start = placement.drawWidth - insets.right;
-    const gradient = ctx.createLinearGradient(start, 0, placement.drawWidth, 0);
-    gradient.addColorStop(0, 'rgba(0,0,0,1)');
-    gradient.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(start, 0, insets.right, placement.drawHeight);
+    const gradient = maskCtx.createLinearGradient(0, 0, placement.drawWidth, 0);
+    gradient.addColorStop(0, 'rgba(255,255,255,1)');
+    gradient.addColorStop(start / placement.drawWidth, 'rgba(255,255,255,1)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    maskCtx.fillStyle = gradient;
+    maskCtx.fillRect(0, 0, placement.drawWidth, placement.drawHeight);
   }
+
   if (insets.top > 0) {
-    const gradient = ctx.createLinearGradient(0, 0, 0, insets.top);
-    gradient.addColorStop(0, 'rgba(0,0,0,0)');
-    gradient.addColorStop(1, 'rgba(0,0,0,1)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, placement.drawWidth, insets.top);
+    const gradient = maskCtx.createLinearGradient(0, 0, 0, placement.drawHeight);
+    gradient.addColorStop(0, 'rgba(255,255,255,0)');
+    gradient.addColorStop(insets.top / placement.drawHeight, 'rgba(255,255,255,1)');
+    gradient.addColorStop(1, 'rgba(255,255,255,1)');
+    maskCtx.fillStyle = gradient;
+    maskCtx.fillRect(0, 0, placement.drawWidth, placement.drawHeight);
   }
+
   if (insets.bottom > 0) {
     const start = placement.drawHeight - insets.bottom;
-    const gradient = ctx.createLinearGradient(0, start, 0, placement.drawHeight);
-    gradient.addColorStop(0, 'rgba(0,0,0,1)');
-    gradient.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, start, placement.drawWidth, insets.bottom);
+    const gradient = maskCtx.createLinearGradient(0, 0, 0, placement.drawHeight);
+    gradient.addColorStop(0, 'rgba(255,255,255,1)');
+    gradient.addColorStop(start / placement.drawHeight, 'rgba(255,255,255,1)');
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    maskCtx.fillStyle = gradient;
+    maskCtx.fillRect(0, 0, placement.drawWidth, placement.drawHeight);
   }
+
+  foregroundCtx.save();
+  foregroundCtx.globalCompositeOperation = 'destination-in';
+  foregroundCtx.drawImage(mask, 0, 0);
+  foregroundCtx.restore();
 
   targetCtx.save();
   targetCtx.globalCompositeOperation = 'source-over';
@@ -568,6 +595,8 @@ function drawFeatheredForeground(
   targetCtx.filter = 'none';
   targetCtx.drawImage(foreground, placement.offsetX, placement.offsetY);
   targetCtx.restore();
+
+  releaseCanvas(mask);
   releaseCanvas(foreground);
 }
 
