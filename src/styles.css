@@ -166,3 +166,104 @@ input:focus, select:focus, button:focus-visible { outline: 3px solid rgba(37, 99
   .custom-bg-actions { display: grid; grid-template-columns: 1fr; }
   .custom-bg-grid { grid-template-columns: 1fr; }
 }
+
+.photo-panel,
+.background-picker-panel {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #dbe3ec;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.photo-panel {
+  background: #f7f9fc;
+  border-color: #cfd8e6;
+}
+.panel-subheading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.panel-subheading strong { font-size: 14px; color: #0f172a; }
+.panel-subheading p { margin-top: 4px; font-size: 12px; }
+.recommend-badge {
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: #e0e7ff;
+  color: #3730a3;
+  font-size: 11px;
+  font-weight: 800;
+}
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+.slider-control { min-width: 0; }
+.slider-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) 112px;
+  align-items: center;
+  gap: 10px;
+}
+.slider-row input[type="range"] {
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.slider-number-wrap {
+  display: grid;
+  grid-template-columns: minmax(62px, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+}
+.slider-number-wrap input { min-height: 36px; padding: 6px 7px; }
+.slider-number-wrap span { color: #64748b; font-size: 12px; font-weight: 700; }
+.preset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 15px;
+  padding-top: 13px;
+  border-top: 1px solid #e2e8f0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+.preset-button {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #fff;
+  color: #334155;
+  padding: 6px 11px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.preset-button:hover { background: #f1f5f9; }
+.custom-bg-grid.controls-only {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.background-picker-panel .background-file-card.wide {
+  margin-top: 14px;
+  max-width: 620px;
+}
+
+@media (max-width: 1000px) {
+  .photo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .custom-bg-grid.controls-only { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  .photo-grid,
+  .custom-bg-grid.controls-only { grid-template-columns: 1fr; }
+  .panel-subheading { flex-direction: column; }
+  .slider-row { grid-template-columns: minmax(0, 1fr) 105px; }
+  .preset-row { align-items: stretch; }
+  .preset-row > span { width: 100%; }
+  .preset-button { flex: 1 1 0; }
+}
