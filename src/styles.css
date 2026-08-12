@@ -46,8 +46,9 @@ input:focus, select:focus, button:focus-visible { outline: 3px solid rgba(37, 99
 .file-main { border: 0; background: transparent; text-align: left; padding: 13px 14px; display: grid; gap: 4px; }
 .file-name { font-weight: 700; overflow-wrap: anywhere; }
 .file-meta { font-size: 12px; color: #64748b; }
-.status-good, .status-bad { width: fit-content; margin-top: 3px; font-size: 11px; font-weight: 800; border-radius: 999px; padding: 3px 8px; }
+.status-good, .status-warn, .status-bad { width: fit-content; margin-top: 3px; font-size: 11px; font-weight: 800; border-radius: 999px; padding: 3px 8px; }
 .status-good { color: #166534; background: #dcfce7; }
+.status-warn { color: #92400e; background: #fef3c7; }
 .status-bad { color: #991b1b; background: #fee2e2; }
 .remove-button { border: 0; background: transparent; color: #94a3b8; font-size: 24px; }
 .remove-button:hover { color: #b91c1c; }
@@ -83,3 +84,8 @@ input:focus, select:focus, button:focus-visible { outline: 3px solid rgba(37, 99
   .primary-button, .ghost-button { width: 100%; }
   .notice-grid { grid-template-columns: 1fr; }
 }
+
+.preview-empty.error { color: #991b1b; background: #fef2f2; padding: 16px; text-align: center; overflow-wrap: anywhere; }
+.fatal-error { max-width: 760px; margin: 48px auto 0; }
+.fatal-error h1 { font-size: 28px; }
+.fatal-error pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; }
