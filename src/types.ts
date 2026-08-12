@@ -1,6 +1,7 @@
-export type MarginMode = 'blur' | 'edge' | 'solid' | 'custom';
+export type MarginMode = 'blur' | 'photo' | 'edge' | 'solid' | 'custom';
 export type OutputFormat = 'same' | 'png' | 'jpeg';
 export type BackgroundFit = 'cover' | 'contain' | 'stretch';
+export type PhotoBackgroundSource = 'source' | 'custom';
 
 export interface Settings {
   widthMm: number;
@@ -8,10 +9,16 @@ export interface Settings {
   dpi: number;
   mode: MarginMode;
   blurMm: number;
+  featherMm: number;
   backgroundColor: string;
   backgroundFit: BackgroundFit;
   backgroundOpacity: number;
   backgroundBrightness: number;
+  backgroundSaturation: number;
+  backgroundContrast: number;
+  photoBackgroundSource: PhotoBackgroundSource;
+  colorMatchStrength: number;
+  grainStrength: number;
   outputFormat: OutputFormat;
   jpegQuality: number;
 }
@@ -39,11 +46,17 @@ export interface RenderOptions {
   targetHeight: number;
   mode: MarginMode;
   blurPx: number;
+  featherPx: number;
   backgroundColor: string;
   backgroundImage?: RenderBackgroundImage | undefined;
   backgroundFit: BackgroundFit;
   backgroundOpacity: number;
   backgroundBrightness: number;
+  backgroundSaturation: number;
+  backgroundContrast: number;
+  photoBackgroundSource: PhotoBackgroundSource;
+  colorMatchStrength: number;
+  grainStrength: number;
 }
 
 export type EncodedFormat = 'png' | 'jpeg';
